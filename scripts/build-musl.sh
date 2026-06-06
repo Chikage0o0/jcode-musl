@@ -103,12 +103,18 @@ EOF
 chmod +x "$WORKDIR/zig-cc" "$WORKDIR/zig-cxx" "$WORKDIR/zig-ar" "$WORKDIR/zig-ranlib"
 
 export CARGO_INCREMENTAL=0
-export CARGO_PROFILE_RELEASE_LTO_OPT_LEVEL=z
-export CARGO_PROFILE_RELEASE_LTO_LTO=fat
-export CARGO_PROFILE_RELEASE_LTO_CODEGEN_UNITS=1
-export CARGO_PROFILE_RELEASE_LTO_PANIC=abort
-export CARGO_PROFILE_RELEASE_LTO_STRIP=symbols
-export CARGO_PROFILE_RELEASE_LTO_INCREMENTAL=false
+
+# Cargo 环境变量无法可靠表达带连字符的 profile 名（`release-lto` 会被拆成
+# `profile.release.lto...`）。这里用 `--config` 覆盖上游 profile，避免 CI
+# 在解析 `CARGO_PROFILE_RELEASE_LTO_*` 时误认为存在 `profile.release` 对象。
+PROFILE_CONFIG=(
+  --config 'profile.release-lto.opt-level="z"'
+  --config 'profile.release-lto.lto="fat"'
+  --config 'profile.release-lto.codegen-units=1'
+  --config 'profile.release-lto.panic="abort"'
+  --config 'profile.release-lto.strip="symbols"'
+  --config 'profile.release-lto.incremental=false'
+)
 
 export "CC_${TARGET_CC_KEY}=$WORKDIR/zig-cc"
 export "CXX_${TARGET_CC_KEY}=$WORKDIR/zig-cxx"
@@ -124,6 +130,7 @@ export "CARGO_TARGET_${TARGET_CARGO_KEY}_RUSTFLAGS=-C target-feature=+crt-static
 (
   cd "$SRC"
   cargo build \
+    "${PROFILE_CONFIG[@]}" \
     --locked \
     --profile release-lto \
     --target "$TARGET" \
