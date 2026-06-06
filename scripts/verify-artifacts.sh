@@ -9,12 +9,33 @@ SUBCOMMAND="${1:?用法: verify-artifacts.sh <features|binary> ...}"
 shift
 
 verify_features() {
-  ensure_cmd cargo
+  ensure_cmd cargo mktemp
   local src="$1"
   local target="$2"
   local output
+  local tmp_dir
+  local stdout_file
+  local stderr_file
+  local status
 
-  output="$(cd "$src" && cargo tree -e features,no-dev -p jcode --target "$target" --locked --no-default-features 2>&1)"
+  tmp_dir="$(mktemp -d)"
+  stdout_file="$tmp_dir/cargo-tree.stdout"
+  stderr_file="$tmp_dir/cargo-tree.stderr"
+
+  if (cd "$src" && cargo tree -e features,no-dev -p jcode --target "$target" --locked --no-default-features >"$stdout_file" 2>"$stderr_file"); then
+    output="$(<"$stdout_file")"
+  else
+    status=$?
+    echo "cargo tree 执行失败" >&2
+    echo '--- cargo tree stdout ---' >&2
+    [ ! -s "$stdout_file" ] || cat "$stdout_file" >&2
+    echo '--- cargo tree stderr ---' >&2
+    [ ! -s "$stderr_file" ] || cat "$stderr_file" >&2
+    rm -rf "$tmp_dir"
+    return "$status"
+  fi
+
+  rm -rf "$tmp_dir"
 
   case "$output" in
     *jcode-embedding*|*jcode-pdf*|*tokenizers*|*pdf-extract*)
