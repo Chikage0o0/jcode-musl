@@ -1,0 +1,262 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 上游 jcode tag，例如 v0.23.0
+        required: true
+        type: string
+      package_release:
+        description: 包修订号（pkgrel）
+        required: false
+        default: "1"
+        type: string
+      publish:
+        description: 上传后是否正式发布 release
+        required: false
+        default: true
+        type: boolean
+      overwrite_assets:
+        description: 若 release 已存在，是否覆盖同名 assets
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ inputs.upstream_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+
+    steps:
+      - name: Checkout scaffolding repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            file \
+            lld \
+            llvm \
+            qemu-user \
+            qemu-user-binfmt \
+            xz-utils
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Prepare work directories
+        shell: bash
+        run: mkdir -p out dist work
+
+      - name: Checkout upstream source
+        shell: bash
+        run: |
+          scripts/checkout-upstream.sh "${{ inputs.upstream_tag }}" work/upstream | tee work/upstream.commit
+
+      - name: Apply musl compatibility patches
+        shell: bash
+        run: scripts/apply-patches.sh work/upstream
+
+      - name: Verify disabled features
+        shell: bash
+        run: scripts/verify-artifacts.sh features work/upstream "${{ matrix.target }}"
+
+      - name: Build static release binary
+        shell: bash
+        env:
+          JCODE_RELEASE_BUILD: "1"
+          JCODE_BUILD_SEMVER: ${{ inputs.upstream_tag }}
+        run: scripts/build-musl.sh work/upstream "${{ matrix.target }}" "out/${{ matrix.target }}"
+
+      - name: Verify static binary
+        shell: bash
+        run: |
+          scripts/verify-artifacts.sh binary \
+            "out/${{ matrix.target }}/jcode-${{ matrix.target }}" \
+            "${{ matrix.target }}"
+
+      - name: Create tar.xz asset
+        shell: bash
+        run: |
+          scripts/package-tar.sh \
+            "out/${{ matrix.target }}/jcode-${{ matrix.target }}" \
+            "${{ matrix.target }}" \
+            "${{ inputs.upstream_tag }}" \
+            dist
+
+      - name: Create OpenWrt ipk asset
+        shell: bash
+        run: |
+          scripts/package-opkg.sh \
+            "out/${{ matrix.target }}/jcode-${{ matrix.target }}" \
+            "${{ matrix.target }}" \
+            "${{ inputs.upstream_tag }}" \
+            dist \
+            "${{ inputs.package_release }}"
+
+      - name: Create Alpine apk asset
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$PWD:/workspace" \
+            -w /workspace \
+            alpine:edge \
+            sh -euc '
+              apk add --no-cache bash >/dev/null
+              bash scripts/package-apk.sh \
+                "/workspace/out/${{ matrix.target }}/jcode-${{ matrix.target }}" \
+                "${{ matrix.target }}" \
+                "${{ inputs.upstream_tag }}" \
+                /workspace/dist \
+                "${{ inputs.package_release }}"
+              apk verify --allow-untrusted /workspace/dist/*.apk
+            '
+
+      - name: Create build info
+        shell: bash
+        run: |
+          scripts/make-buildinfo.sh \
+            work/upstream \
+            "${{ inputs.upstream_tag }}" \
+            "dist/jcode-${{ matrix.target }}-buildinfo.json"
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    name: Publish release
+    if: ${{ needs.build.result == 'success' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout scaffolding repository
+        uses: actions/checkout@v4
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums and release notes
+        shell: bash
+        run: |
+          mkdir -p work/publish
+          (cd dist && sha256sum * > SHA256SUMS)
+          python3 - <<'PY'
+          import glob
+          import json
+          import os
+
+          notes_path = "work/publish/RELEASE_NOTES.md"
+          info_files = sorted(glob.glob("dist/*-buildinfo.json"))
+          buildinfo = {}
+          if info_files:
+              with open(info_files[0], "r", encoding="utf-8") as fh:
+                  buildinfo = json.load(fh)
+
+          assets = sorted(
+              os.path.basename(path)
+              for path in glob.glob("dist/*")
+              if os.path.isfile(path) and not path.endswith("RELEASE_NOTES.md")
+          )
+
+          lines = [
+              f"# jcode musl {os.environ['UPSTREAM_TAG']}",
+              "",
+              f"- 上游仓库：`{buildinfo.get('upstream_repo', '1jehuang/jcode')}`",
+              f"- 上游 tag：`{buildinfo.get('tag', os.environ['UPSTREAM_TAG'])}`",
+              f"- 上游 commit：`{buildinfo.get('commit', 'unknown')}`",
+              "- 构建特性：`--no-default-features`（不含 pdf / embeddings）",
+              f"- 包修订号：`r{os.environ['PACKAGE_RELEASE']}`",
+              "- 目标：`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`",
+              "",
+              "## Assets",
+              "",
+          ]
+          lines.extend(f"- `{asset}`" for asset in assets)
+          lines.extend([
+              "",
+              "## 说明",
+              "",
+              "- `apk` 资产默认为未签名包，安装时通常需要 `apk add --allow-untrusted`。",
+              "- `SHA256SUMS` 已随 release 一并上传。",
+          ])
+
+          with open(notes_path, "w", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          PY
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          PACKAGE_RELEASE: ${{ inputs.package_release }}
+
+      - name: Create draft release and upload assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          OVERWRITE_ASSETS: ${{ inputs.overwrite_assets }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+        run: |
+          title="jcode musl ${UPSTREAM_TAG}"
+          if gh release view "${UPSTREAM_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            if [ "${OVERWRITE_ASSETS}" != "true" ]; then
+              echo "release ${UPSTREAM_TAG} 已存在，且 overwrite_assets=false；停止发布。" >&2
+              exit 1
+            fi
+            gh release edit "${UPSTREAM_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" \
+              --notes-file work/publish/RELEASE_NOTES.md
+          else
+            gh release create "${UPSTREAM_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" \
+              --draft \
+              --notes-file work/publish/RELEASE_NOTES.md
+          fi
+
+          gh release upload "${UPSTREAM_TAG}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --clobber
+
+          if [ "${PUBLISH_RELEASE}" = "true" ]; then
+            gh release edit "${UPSTREAM_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --draft=false
+          else
+            echo "release ${UPSTREAM_TAG} 保持 draft 状态。"
+          fi

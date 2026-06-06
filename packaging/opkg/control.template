@@ -1,0 +1,13 @@
+# OpenWrt opkg control 模板示例。
+# 说明：实际打包脚本可直接生成 control 文件，不要求必须读取本模板。
+
+Package: jcode
+Version: {{VERSION}}-r{{PKGREL}}
+Architecture: {{ARCH}}
+Maintainer: {{MAINTAINER}}
+Section: utils
+Priority: optional
+License: MIT
+Depends: ca-bundle
+Installed-Size: {{INSTALLED_SIZE}}
+Description: Static musl build of jcode without default pdf/embeddings features.

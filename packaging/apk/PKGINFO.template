@@ -1,0 +1,12 @@
+# apk-tools v3 .PKGINFO 模板示例。
+# 说明：实际打包脚本使用 `apk mkpkg -I key:value` 直接传入元数据。
+
+pkgname = jcode
+pkgver = {{VERSION}}-r{{PKGREL}}
+pkgdesc = Static musl build of jcode without default pdf/embeddings features
+url = https://github.com/1jehuang/jcode
+arch = {{ARCH}}
+license = MIT
+origin = jcode
+maintainer = {{MAINTAINER}}
+depend = ca-certificates

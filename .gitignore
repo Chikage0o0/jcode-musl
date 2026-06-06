@@ -1,0 +1,10 @@
+out/
+dist/
+work/
+tmp/
+*.log
+*.tar.xz
+*.ipk
+*.apk
+SHA256SUMS
+.DS_Store

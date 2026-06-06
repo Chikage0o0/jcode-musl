@@ -1,0 +1,20 @@
+diff --git a/src/main.rs b/src/main.rs
+index 1111111..2222222 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -28 +28 @@
+-#[cfg(all(target_os = "linux", not(feature = "jemalloc")))]
++#[cfg(all(target_os = "linux", target_env = "gnu", not(feature = "jemalloc")))]
+@@ -44 +44 @@ fn configure_system_allocator() {
+-#[cfg(not(all(target_os = "linux", not(feature = "jemalloc"))))]
++#[cfg(not(all(target_os = "linux", target_env = "gnu", not(feature = "jemalloc"))))]
+diff --git a/crates/jcode-base/src/embedding.rs b/crates/jcode-base/src/embedding.rs
+index 3333333..4444444 100644
+--- a/crates/jcode-base/src/embedding.rs
++++ b/crates/jcode-base/src/embedding.rs
+@@ -260 +260 @@ pub fn maybe_unload_if_idle(idle_for: Duration) -> bool {
+-        #[cfg(all(target_os = "linux", not(feature = "jemalloc")))]
++        #[cfg(all(target_os = "linux", target_env = "gnu", not(feature = "jemalloc")))]
+@@ -311 +311 @@ pub fn unload_now() -> bool {
+-        #[cfg(all(target_os = "linux", not(feature = "jemalloc")))]
++        #[cfg(all(target_os = "linux", target_env = "gnu", not(feature = "jemalloc")))]
